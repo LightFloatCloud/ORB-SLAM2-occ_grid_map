@@ -13,7 +13,9 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   sensor_msgs
   std_msgs
-  tf
+  
+  tf2_ros
+  tf2
 )
 
 
@@ -48,11 +50,5 @@ target_link_libraries(mapping
   ${PROJECT_NAME}
 )
 
-add_executable(odometry
-test/odometry.cc)
-target_link_libraries(odometry
-  ${catkin_LIBRARIES}
-  ${PROJECT_NAME}
-)
 
 

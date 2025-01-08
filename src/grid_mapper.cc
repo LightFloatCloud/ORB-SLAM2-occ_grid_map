@@ -3,58 +3,74 @@
 
 #include <occ_grid_mapping/grid_mapper.h>
 
+#include <sensor_msgs/point_cloud2_iterator.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>  // 包含 tf2::fromMsg
+
 GridMapper::GridMapper ( GridMap* map, Pose2d& T_r_l, double& P_occ, double& P_free, double& P_prior):
 map_(map), T_r_l_(T_r_l), P_occ_(P_occ), P_free_(P_free), P_prior_(P_prior)
 {
     
 }
 
-void GridMapper::updateMap ( const sensor_msgs::LaserScanConstPtr& scan,  Pose2d& robot_pose )
+void GridMapper::updateMap (const sensor_msgs::PointCloud2ConstPtr& cloud_msg, geometry_msgs::Transform& transform) 
 {
-    /* 获取激光的信息 */
-    const double& ang_min = scan->angle_min;
-    const double& ang_max = scan->angle_max;
-    const double& ang_inc = scan->angle_increment;
-    const double& range_max = scan->range_max;
-    const double& range_min = scan->range_min;
-    
-    /* 设置遍历的步长，沿着一条激光线遍历 */
+
+    // 获取地图的分辨率
     const double& cell_size = map_->getCellSize();
     const double inc_step = 1.0 * cell_size;
+    // 使用 PointCloud2Iterator 遍历点云
+    sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud_msg, "x");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_y(*cloud_msg, "y");
+    sensor_msgs::PointCloud2ConstIterator<float> iter_z(*cloud_msg, "z");
 
-    /* for every laser beam */
-    for(size_t i = 0; i < scan->ranges.size(); i ++)
-    {
-        /* 获取当前beam的距离 */
-        double R = scan->ranges.at(i); 
-        if(R > range_max || R < range_min)
-            continue;
+    tf2::Transform tf_transform;
+    tf2::fromMsg(transform, tf_transform);
+    
+    // 提取相机的平移部分（camera 在 map 坐标系下的位置）
+    double camera_x = transform.translation.x;
+    double camera_y = transform.translation.y;
+    double camera_z = transform.translation.z;
+
+    // 遍历点云中的每个点
+    for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
+        // 获取当前点的坐标
+        double x_c = *iter_x;
+        double y_c = *iter_y;
+        double z_c = *iter_z;
         
-        /* 沿着激光射线以inc_step步进，更新地图*/
-        double angle = ang_inc * i + ang_min;
-        double cangle = cos(angle);
-        double sangle = sin(angle);
-        Eigen::Vector2d last_grid(Eigen::Infinity, Eigen::Infinity); //上一步更新的grid位置，防止重复更新
-        for(double r = 0; r < R + cell_size; r += inc_step)
-        {
-            Eigen::Vector2d p_l(
-                r * cangle,
-                r * sangle
-            ); //在激光雷达坐标系下的坐标
-            
-            /* 转换到世界坐标系下 */
-            Pose2d laser_pose = robot_pose * T_r_l_;
-            Eigen::Vector2d p_w = laser_pose * p_l;
+        // 将点从 camera 坐标系转换到 map 坐标系
+        tf2::Vector3 point_camera(x_c, y_c, z_c);
+        tf2::Vector3 point_map = tf_transform * point_camera;
+        
+        // 计算点在 map 坐标系下的相对位置（减去相机的位置）
+        double x_relative = point_map.x() - camera_x;
+        double y_relative = point_map.y() - camera_y;
+        
+        // 将点云数据转换到世界坐标系
+        Eigen::Vector2d p_relative(x_relative, y_relative);  // camera投影下的坐标
+        // 计算点到相机的距离
+        double R = p_relative.norm();  
 
-            /* 更新这个grid */
-            if(p_w == last_grid) //避免重复更新
-                continue;
-            
+        // 沿着激光射线更新地图
+        Eigen::Vector2d last_grid(Eigen::Infinity, Eigen::Infinity);  // 上一步更新的 grid 位置
+        for (double r = 0; r < R + cell_size; r += inc_step) {
+            Eigen::Vector2d p_l(
+                r * (x_relative / R), 
+                r * (y_relative / R)
+            );
+
+            // 转换到世界坐标系
+            Eigen::Vector2d p_w = Eigen::Vector2d(camera_x, camera_y) + p_l;
+
+            // 避免重复更新
+            if (p_w == last_grid) continue;
+
+            // 更新栅格
             updateGrid(p_w, laserInvModel(r, R, cell_size));
-            	    
+
             last_grid = p_w;
-        }//for each step
-    }// for each beam
+        }
+    }
 }
 
 void GridMapper::updateGrid ( const Eigen::Vector2d& grid, const double& pmzx )

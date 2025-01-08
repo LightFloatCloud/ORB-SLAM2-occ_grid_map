@@ -5,7 +5,7 @@
 #define POSE2D_H
 
 #include <eigen3/Eigen/Core>
-#define PI 3.1415926
+constexpr double PI = 3.14159265358979323846;
 
 class Pose2d{
 public:
